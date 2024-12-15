@@ -1,0 +1,20 @@
+version: '3.9'
+
+services:
+
+  db:
+    image: postgres:latest
+    # By default, the Postgres data will be only in the container.
+    # If you decide to delete the container, all the data are going to disappear definitively.
+
+    # To persist the data, we will use a Docker volume.
+    # It will share the database date inside of your container with a local folder of your computer.
+    # It means that everytime you will re-build your Postgres Docker Compose, these same data will be used for the current project.
+    # volumes:
+    #   - ${PWD}/db-data/:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_USER: globant
+      POSTGRES_PASSWORD: globant
+      POSTGRES_DB: globant_challenge
+    ports:
+      - 5432:5432
