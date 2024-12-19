@@ -13,6 +13,16 @@ register_adapter(np.float64, AsIs)
 # Connect metadata with engine, to reflect tables on DataBase
 metadata.reflect(bind=engine)
 
+# Message to send when functions end
+message_to_return = {
+    'status':'',
+    'status_code': 102,
+    'affected_rows': 0,
+    'operation': '',
+    'message': '',
+    'data': ''
+}
+
 def df_to_schema(df: pd.DataFrame, table: Table):
     """
     Align the DataFrame's column types with the SQLAlchemy table schema.
@@ -40,6 +50,9 @@ def df_to_schema(df: pd.DataFrame, table: Table):
                 df[column.name] = df[column.name].astype(str)
             elif isinstance(column.type, DateTime):
                 df[column.name] = pd.to_datetime(df[column.name], errors='ignore').dt.tz_localize(None)
+
+    df = df.replace({np.nan: None})
+
     return df
 
 
@@ -59,7 +72,7 @@ def process_csv(file_path: str) -> dict:
     status_code = 500
     affected_rows = 0
     operation = 'process_csv'
-    message = None
+    message = ''
 
     try:
         # Infer table name from file name
@@ -111,20 +124,19 @@ def process_csv(file_path: str) -> dict:
     
     except Exception as e:
         message = f"Error processing file {file_path}: {str(e)}"
-        df = None
+        df = ''
     
     finally:
         os.remove(file_path)
 
-        return {
-            'status': status,
-            'status_code': status_code,
-            'operation': operation,
-            'affected_rows': affected_rows,
-            'message': message,
-            'data': df
-        }
-    
+        message_to_return['status'] = status
+        message_to_return['status_code'] = status_code
+        message_to_return['operation'] = operation
+        message_to_return['affected_rows'] = affected_rows
+        message_to_return['message'] = message
+        message_to_return['data'] = {'dataframe':df, 'table_name':table_name}
+
+        return message_to_return
 
 
 # Insert records function
@@ -145,7 +157,8 @@ def insert_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
     status_code = 500
     affected_rows = 0
     operation = 'insert'
-    message = None
+    message = ''
+    data = ''
 
     try:
         table = metadata.tables.get(table_name)
@@ -180,6 +193,7 @@ def insert_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
             else:
                 non_existing_df = df
 
+            print(f'Inserting records into table {table_name}')
             # Insert non-existing records
             if not non_existing_df.empty:
                 result = conn.execute(
@@ -202,13 +216,15 @@ def insert_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
         message = str(e)
     
     finally:
-        return {
-            'status': status,
-            'status_code': status_code,
-            'operation': operation,
-            'affected_rows': affected_rows,
-            'message': message
-        }
+
+        message_to_return['status'] = status
+        message_to_return['status_code'] = status_code
+        message_to_return['operation'] = operation
+        message_to_return['affected_rows'] = affected_rows
+        message_to_return['message'] = message
+        message_to_return['data'] = data
+
+        return message_to_return    
 
 
 # Update records function
@@ -229,7 +245,8 @@ def update_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
     status_code = 500
     affected_rows = 0
     operation = 'update'
-    message = None
+    message = ''
+    data = ''
 
     try:
         table = metadata.tables.get(table_name)
@@ -238,9 +255,8 @@ def update_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
             raise ValueError(message)
 
         df = df_to_schema(df, table)
-
+        
         with engine.begin() as conn:
-
             # Fetch existing records from the database
             existing_query = conn.execute(
                 table.select().where(
@@ -249,23 +265,54 @@ def update_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
             )
             existing_records = pd.DataFrame(existing_query.fetchall(), columns=existing_query.keys())
             existing_records = df_to_schema(existing_records, table)
-
-            if existing_records.empty:
-                message = 'No matching records found for update.'
-                raise ValueError(message)
+            
+            # Set index to ids
+            df = df.set_index(id_columns, drop=False)
 
             # Identify records that have changed
-            compare = df.compare(existing_records, result_names=('new_', 'old_'))
+            existing_records_to_compare = existing_records.set_index(id_columns, drop=False)
+            index_existing_records_to_compare = existing_records_to_compare.index.tolist()
+            df_to_compare = df.loc[index_existing_records_to_compare]
+            
+            df_to_insert_filter = df.index.difference(index_existing_records_to_compare)
+            df_to_insert = df.loc[df_to_insert_filter]
+            
+            compare = df_to_compare.compare(existing_records_to_compare, result_names=('new_', 'old_'))
             changed_rows = compare.index.values.tolist()
+            
+            # Insert records if not exists
+            if existing_records.empty:
+                result = insert_records(table_name, df, id_columns)
+                status = result['status']
+                status_code = result['status_code']
+                operation = result['operation']
+                affected_rows = result['affected_rows']
+                message = result['message']
+                # df = result['data']
+                raise
 
-            if len(changed_rows) == 0:
+            elif df_to_insert.shape[0] > 0 and len(changed_rows) == 0:
+                result = insert_records(table_name, df_to_insert, id_columns)
+                status = result['status']
+                status_code = result['status_code']
+                operation = result['operation']
+                affected_rows = result['affected_rows']
+                message = result['message']
+                # df = result['data']
+                raise
+
+            elif df_to_insert.shape[0] > 0 and len(changed_rows) != 0:
+                result = insert_records(table_name, df_to_insert, id_columns)
+                affected_rows = result['affected_rows']
+
+            elif df_to_insert.shape[0] == 0 and len(changed_rows) == 0:
                 status_code = 200
+                status = 'success'
                 message = 'No changes detected in the provided data.'
-                raise ValueError(message)
-
+                raise
+            
             # Prepare the update operations and extract only new data
-            changed_records = df.iloc[changed_rows]
-
+            changed_records = df.loc[changed_rows]
 
             for _, row in changed_records.iterrows():
                 id_filter = {col: row[col] for col in id_columns}
@@ -284,24 +331,27 @@ def update_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
                 
                 affected_rows += result.rowcount
             
+            
             conn.commit()
             conn.close()
 
         status = 'success'
         status_code = 200
-        affected_rows = affected_rows
+        affected_rows += affected_rows
 
     except Exception as e:
         message = str(e)
     
     finally:
-        return {
-            'status': status,
-            'status_code': status_code,
-            'operation': operation,
-            'affected_rows': affected_rows,
-            'message': message
-        }
+
+        message_to_return['status'] = status
+        message_to_return['status_code'] = status_code
+        message_to_return['operation'] = operation
+        message_to_return['affected_rows'] = affected_rows
+        message_to_return['message'] = message
+        message_to_return['data'] = data
+
+        return message_to_return
 
 
 # Delete records function
@@ -322,7 +372,8 @@ def delete_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
     status_code = 500
     affected_rows = 0
     operation = 'delete'
-    message = None
+    message = ''
+    data = ''
 
     try:
         table = metadata.tables.get(table_name)
@@ -353,32 +404,14 @@ def delete_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
         message = str(e)
     
     finally:
-        return {
-            'status': status,
-            'status_code': status_code,
-            'operation': operation,
-            'affected_rows': affected_rows,
-            'message': message
-        }
+        message_to_return['status'] = status
+        message_to_return['status_code'] = status_code
+        message_to_return['operation'] = operation
+        message_to_return['affected_rows'] = affected_rows
+        message_to_return['message'] = message
+        message_to_return['data'] = data
+
+        return message_to_return
 
 
 # TODO  Crear una función para llamar al procesamiento y luego pasar la función de insertado o actualizado
-
-TABLE_NAME = 'hired_employees'
-COLUMNS_IDS = ['id']
-
-new_data_path = r'C:\Users\JavierSchmitt\Downloads\hired_employees__1___1_.csv'
-df = pd.read_csv(
-    new_data_path
-    , sep=','
-    , names=['id', 'name', 'datetime', 'department_id', 'job_id']
-)[:2]
-
-df.loc[1, 'name'] = 'PRUEBA PRUEBA'
-
-# result = insert_records(TABLE_NAME, df, COLUMNS_IDS)
-# result = delete_records(TABLE_NAME, df, COLUMNS_IDS)
-result = process_csv(new_data_path)
-df = result['data']
-
-print('ok')
