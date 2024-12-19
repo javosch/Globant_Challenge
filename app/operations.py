@@ -1,23 +1,28 @@
-from fastapi import FastAPI, UploadFile, HTTPException
+from fastapi import FastAPI, UploadFile, HTTPException, Query
 import json
 import os
 
 from app.config import metadata
 from app.config import engine
-from app.utils import process_csv, update_records
+from app.utils import process_csv, update_records, select_records
+from app.business import employees_hired_q_2021, total_employees_by_department
 
 
 def init_operations(app: FastAPI):
     @app.get('/get_tables/')
     async def available_tables():
         # Por implementar lectura de tablas disponibles
-        pass
+        metadata.reflect(bind=engine)
+        tables = list(metadata.tables.keys())
+        return json.dumps({'tables_names': tables})
 
 
-    @app.get('/get_info/{table_name}/{id}')
-    async def get_info(table_name: str, id: int):
-        # Por implementar lectura de datos
-        pass
+    @app.get('/get_info/{table_name}/{id_columns}/{id}')
+    async def get_info(table_name: str, id_columns: str, id: str):
+        # TODO: implementar manejo para poder pasar listas como input
+        result = select_records(table_name, id_columns, id)
+
+        return result
 
 
     @app.post('/upload_csv/')
@@ -57,53 +62,48 @@ def init_operations(app: FastAPI):
     @app.post('/batch_insert/')
     async def batch_insert(request: dict):
         # Por implementar insertado en batch
-        pass
+        return pass_func
 
 
     @app.put('/update/{table_name}/{id}')
-    async def api_update_record(table_name: str, id: int, request: dict):
+    async def api_update_record(table_name: str, id: str):
         # Por implementar el update
-        pass
+        return pass_func
 
 
     @app.delete('/delete/{table_name}/{id}')
-    async def delete_record(table_name: str, id: int):
+    async def delete_record(table_name: str, id: str):
         # Por implementar el delete
-        pass
+        return pass_func
+    
+    """
+    ------------------
+        Business End Points
+    ------------------
+    
+    """
+
+    desc_temp = 'Number of employees hired for each job and department in selected year divided by quarter.'
+    @app.get('/business/employees_hired_by_q', description=desc_temp)
+    async def employees_hired_by_q(year: int = Query(default=2021)):
+        try:
+            result = employees_hired_q_2021(year)
+            return result
+        
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error getting records: {str(e)}")
     
 
+    desc_temp = 'List of ids, name and number of employees hired of each department that hired more employees than the mean of employees hired in selected year for all the departments'
+    @app.get('/business/total_employees_by_department', description=desc_temp)
+    async def employees_by_department(year: int = Query(default=2021)):
+        try:
+            result = total_employees_by_department(year)
+            return result
+        
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error getting records: {str(e)}")
 
-
-
-
-#     TABLE_NAME = 'hired_employees'
-#     COLUMNS_IDS = ['id']
-#     import pandas as pd
-#     new_data_path = r'C:\Users\JavierSchmitt\Downloads\hired_employees__1___1_.csv'
-#     df = pd.read_csv(
-#         new_data_path
-#         , sep=','
-#         , names=['id', 'name', 'datetime', 'department_id', 'job_id']
-#     )[:2]
-
-#     df.loc[1, 'name'] = 'PRUEBA PRUEBA'
-
-#     # result = insert_records(TABLE_NAME, df, COLUMNS_IDS)
-#     # result = delete_records(TABLE_NAME, df, COLUMNS_IDS)
-#     import asyncio
-
-#     async def test_upload_csv(file_path):
-#         return await upload_csv(file_path)
     
-#     with open(new_data_path, "rb") as f:
-#         upload_file = UploadFile(filename="hired_employees.csv", file=f)
 
-#         result = asyncio.run(test_upload_csv(upload_file))
-#     # result = upload_csv(new_data_path)
-#     # df = (await result)['data']
-
-#     print('ok')
-
-# app = FastAPI()
-# init_operations(app)
-# print('ok')
+pass_func = 'Not implemented yet.'
