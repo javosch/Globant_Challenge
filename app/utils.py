@@ -414,4 +414,22 @@ def delete_records(table_name: str, df: pd.DataFrame, id_columns: list[str]) -> 
         return message_to_return
 
 
+def select_records(table_name: str, id_columns: str, id: str):
+    table = metadata.tables.get(table_name)
+
+    with engine.begin() as conn:
+        # Fetch existing records from the database
+        data = conn.execute(
+            table.select().where(
+                # *[table.c[col].in_(id) for col in id_columns]
+                table.c[id_columns].in_([id])
+            )
+        )
+
+        df = pd.DataFrame(data.fetchall(), table.columns.keys())
+
+        conn.close()
+        
+    return df.to_json()
+
 # TODO  Crear una función para llamar al procesamiento y luego pasar la función de insertado o actualizado
