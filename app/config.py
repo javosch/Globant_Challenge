@@ -20,7 +20,7 @@ metadata = MetaData()
 Session = sessionmaker(bind=engine)
 
 def init_db():
-    metadata.create_all(engine)
+    metadata.create_all(engine, checkfirst=True)
 
     data_catalog = [
         [1, 'departments', 'departments__1___1_'],
